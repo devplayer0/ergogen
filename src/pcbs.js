@@ -101,10 +101,22 @@ const kicad_suffix = `
 )
 `
 
-const kicad_netclass = `
+const kicad_default_netclass = `
   (net_class Default "This is the default net class."
     (clearance 0.2)
     (trace_width 0.25)
+    (via_dia 0.8)
+    (via_drill 0.4)
+    (uvia_dia 0.3)
+    (uvia_drill 0.1)
+    __ADD_NET
+  )
+`
+
+const kicad_power_netclass = `
+  (net_class Power "This is the power net class."
+    (clearance 0.2)
+    (trace_width 0.5)
     (via_dia 0.8)
     (via_drill 0.4)
     (uvia_dia 0.3)
@@ -240,7 +252,7 @@ exports.parse = (config, points, outlines, units) => {
     for (const [pcb_name, pcb_config] of Object.entries(pcbs)) {
 
         // config sanitization
-        a.unexpected(pcb_config, `pcbs.${pcb_name}`, ['outlines', 'footprints', 'references'])
+        a.unexpected(pcb_config, `pcbs.${pcb_name}`, ['outlines', 'footprints', 'references', 'include_keys'])
         const references = a.sane(pcb_config.references || false, `pcbs.${pcb_name}.references`, 'boolean')()
 
         // outline conversion
@@ -274,11 +286,13 @@ exports.parse = (config, points, outlines, units) => {
 
         const footprints = []
 
-        // key-level footprints
-        for (const [p_name, point] of Object.entries(points)) {
-            for (const [f_name, f] of Object.entries(point.meta.footprints || {})) {
-                footprints.push(footprint(f, `${p_name}.footprints.${f_name}`, points, point, net_indexer, component_indexer, units, {references}))
-            }
+        if(pcb_config.include_keys != false) {
+          // key-level footprints
+          for (const [p_name, point] of Object.entries(points)) {
+              for (const [f_name, f] of Object.entries(point.meta.footprints || {})) {
+                  footprints.push(footprint(f, `${p_name}.footprints.${f_name}`, points, point, net_indexer, component_indexer, units, {references}))
+              }
+          }
         }
 
         // global one-off footprints
@@ -292,13 +306,22 @@ exports.parse = (config, points, outlines, units) => {
 
         // finalizing nets
         const nets_arr = []
-        const add_nets_arr = []
+        const add_default_nets_arr = []
+        const add_power_nets_arr = []
         for (const [net, index] of Object.entries(nets)) {
             nets_arr.push(`(net ${index} "${net}")`)
-            add_nets_arr.push(`(add_net "${net}")`)
+            if (['vcc', 'vdd', 'raw', 'gnd', 'bplus', 'bminus', 'braw'].includes(net.toLowerCase())) {
+                add_power_nets_arr.push(`(add_net "${net}")`)
+            } else {
+                add_default_nets_arr.push(`(add_net "${net}")`)
+            }
         }
 
-        const netclass = kicad_netclass.replace('__ADD_NET', add_nets_arr.join('\n'))
+        const power_filter = net => {}
+        const signal_filter = net => { !power_filter(net) }
+
+        const default_netclass = kicad_default_netclass.replace('__ADD_NET', add_default_nets_arr.join('\n'))
+        const power_netclass = kicad_power_netclass.replace('__ADD_NET', add_power_nets_arr.join('\n'))
         const nets_text = nets_arr.join('\n')
         const footprint_text = footprints.join('\n')
         const outline_text = Object.values(kicad_outlines).join('\n')
@@ -309,7 +332,8 @@ exports.parse = (config, points, outlines, units) => {
         results[pcb_name] = `
             ${personalized_prefix}
             ${nets_text}
-            ${netclass}
+            ${default_netclass}
+            ${power_netclass}
             ${footprint_text}
             ${outline_text}
             ${kicad_suffix}
